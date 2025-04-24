@@ -187,4 +187,12 @@ defmodule Ingest.Accounts.User do
       add_error(changeset, :current_password, "is not valid")
     end
   end
+
+  def is_admin?(%Ingest.Accounts.User{roles: roles}) when is_list(roles) do
+    :admin in roles
+  end
+
+  def is_admin?(%Ingest.Accounts.User{roles: role}) do
+    role == :admin
+  end
 end

@@ -4,6 +4,7 @@ defmodule IngestWeb.ProjectShowLive do
   alias Ingest.Projects.ProjectInvites
   alias Ingest.Projects
   use IngestWeb, :live_view
+  require Logger
 
   @impl true
   def render(assigns) do
@@ -463,14 +464,28 @@ defmodule IngestWeb.ProjectShowLive do
     destination = Ingest.Destinations.get_destination!(destination)
     project = Projects.get_owned_project!(socket.assigns.current_user, id)
 
+    destination_member =
+      Ingest.Destinations.list_destination_members(destination)
+      |> Enum.find(fn member -> to_string(member.project_id) == to_string(project.id) end)
+
+    destination_member =
+      if is_nil(destination_member) and Ingest.Accounts.User.is_admin?(socket.assigns.current_user) do
+        %Ingest.Destinations.DestinationMembers{
+          id: -1,
+          user_id: socket.assigns.current_user.id,
+          project_id: project.id,
+          destination_id: destination.id,
+          role: :admin,
+          status: :virtual
+        }
+      else
+        destination_member
+      end
+
     {:noreply,
      socket
      |> assign(:destination, destination)
-     |> assign(
-       :destination_member,
-       Ingest.Destinations.list_destination_members(destination)
-       |> Enum.find(fn member -> member.project_id == project.id end)
-     )
+     |> assign(:destination_member, destination_member)
      |> stream(:destinations, project.destinations)
      |> stream(:templates, project.templates)
      |> assign(:project, project)
