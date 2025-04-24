@@ -33,13 +33,19 @@ defmodule Ingest.Projects do
     |> Repo.preload(:user)
   end
 
-  def update_project_members(%Project{} = project, %User{} = user, role) do
-    from(pm in ProjectMembers,
-      where:
-        pm.member_id ==
-          ^user.id and pm.project_id == ^project.id
-    )
-    |> Repo.update_all(set: [role: role])
+  def update_project_member_role(
+    %Project{} = project, %User{} = user_initiator, %User{} = user, role
+  ) do
+    if user_initiator.roles != :admin do
+      {:error, :not_admin}
+    else
+      from(pm in ProjectMembers,
+        where:
+          pm.member_id ==
+            ^user.id and pm.project_id == ^project.id
+      )
+      |> Repo.update_all(set: [role: role])
+    end
   end
 
   def list_project_with_count do

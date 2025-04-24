@@ -259,13 +259,23 @@ defmodule IngestWeb.ProjectShowLive do
             <.table id="members" rows={@members}>
               <:col :let={member} label="Member">{member.user.email}</:col>
               <:col :let={member} label="Role">
-                <.form for={} phx-change="update_role" phx-value-member={member.user.id}>
+                <div
+                  :if={@current_user.roles != :admin}
+                >
+                  {get_role_key_map()[member.role]}
+                </div>
+                <.form
+                  :if={@current_user.roles == :admin}
+                  for={}
+                  phx-change="update_role"
+                  phx-value-member={member.user.id}
+                >
                   <.input
                     name="role"
+                    options={get_role_entries()}
+                    prompt="Select one"
                     type="select"
                     value={member.role}
-                    prompt="Select one"
-                    options={[Member: :member, Manager: :manager, "Co-Owner": :owner]}
                   />
                 </.form>
               </:col>
@@ -447,6 +457,25 @@ defmodule IngestWeb.ProjectShowLive do
   end
 
   @impl true
+  def get_role_entries() do
+    [{:Member, :member}, {:Manager, :manager}, {:Owner, :owner}]
+  end
+
+  @impl true
+  def get_role_name_map() do
+    for {key, value} <- get_role_entries(), into: %{} do
+      {key, value}
+    end
+  end
+
+  @impl true
+  def get_role_key_map() do
+    for {key, value} <- get_role_entries(), into: %{} do
+      {value, key}
+    end
+  end
+
+  @impl true
   def mount(_params, _session, socket) do
     {:ok,
      socket
@@ -607,7 +636,8 @@ defmodule IngestWeb.ProjectShowLive do
         socket
       ) do
     case socket.assigns.project
-         |> Ingest.Projects.update_project_members(
+         |> Ingest.Projects.update_project_member_role(
+           socket.assigns.current_user,
            Enum.find(socket.assigns.project.project_members, fn member ->
              member.id == member_id
            end),
