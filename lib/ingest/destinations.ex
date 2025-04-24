@@ -13,6 +13,8 @@ defmodule Ingest.Destinations do
   alias Ingest.Destinations.Client
   alias Ingest.Accounts.User
 
+  require Logger
+
   @doc """
   Returns the list of clients.
 
@@ -127,15 +129,27 @@ defmodule Ingest.Destinations do
   end
 
   def list_own_destinations(%User{} = user) do
-    Repo.all(
+
+    query =
       from d in Destination,
         left_join: dm in DestinationMembers,
         on: dm.destination_id == d.id,
-        where: d.inserted_by == ^user.id or (dm.user_id == ^user.id and dm.role == :manager),
         group_by: d.id,
+        preload: [:destination_members],
         select: %{d | status: dm.status}
-    )
-    |> Repo.preload(:destination_members)
+
+    filter_query =
+      if :admin in List.wrap(user.roles) do
+        # Admins get all destinations
+        query
+      else
+        from [d, dm] in query,
+          where:
+            d.inserted_by == ^user.id or
+              (dm.user_id == ^user.id and dm.role == :manager)
+      end
+
+    Repo.all(filter_query)
   end
 
   @doc """
@@ -161,6 +175,8 @@ defmodule Ingest.Destinations do
   end
 
   def get_destination_member!(id) do
+
+    Logger.info("GET DESTINAITON MEMBERS IS CALLED #{id}")
     member = Repo.get!(DestinationMembers, id)
 
     destination_query =
