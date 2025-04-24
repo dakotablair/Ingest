@@ -476,7 +476,9 @@ defmodule IngestWeb.ProjectShowLive do
           project_id: project.id,
           destination_id: destination.id,
           role: :admin,
-          status: :virtual
+          status: :accepted,
+          email: socket.assigns.current_user.email,
+          request_id: nil
         }
       else
         destination_member
