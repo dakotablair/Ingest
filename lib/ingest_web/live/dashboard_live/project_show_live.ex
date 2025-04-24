@@ -468,22 +468,6 @@ defmodule IngestWeb.ProjectShowLive do
       Ingest.Destinations.list_destination_members(destination)
       |> Enum.find(fn member -> to_string(member.project_id) == to_string(project.id) end)
 
-    destination_member =
-      if is_nil(destination_member) and Ingest.Accounts.User.is_admin?(socket.assigns.current_user) do
-        %Ingest.Destinations.DestinationMembers{
-          id: -1,
-          user_id: socket.assigns.current_user.id,
-          project_id: project.id,
-          destination_id: destination.id,
-          role: :admin,
-          status: :accepted,
-          email: socket.assigns.current_user.email,
-          request_id: nil
-        }
-      else
-        destination_member
-      end
-
     {:noreply,
      socket
      |> assign(:destination, destination)
