@@ -129,7 +129,6 @@ defmodule Ingest.Destinations do
   end
 
   def list_own_destinations(%User{} = user) do
-
     query =
       from d in Destination,
         left_join: dm in DestinationMembers,
@@ -176,7 +175,6 @@ defmodule Ingest.Destinations do
 
   def get_destination_member!(id) do
 
-    Logger.info("GET DESTINAITON MEMBERS IS CALLED #{id}")
     member = Repo.get!(DestinationMembers, id)
 
     destination_query =
@@ -432,6 +430,7 @@ defmodule Ingest.Destinations do
         %DestinationMembers{} = member,
         config
       ) do
+
     {updated_r, _d} =
       if member.request_id do
         from(rd in Ingest.Requests.RequestDestination,

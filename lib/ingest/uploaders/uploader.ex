@@ -8,6 +8,7 @@ defmodule Ingest.Uploaders.MultiDestinationWriter do
   alias Ingest.Uploaders.Azure
   alias Ingest.Uploaders.S3
   alias Ingest.Uploaders.Lakefs
+  require Logger
 
   @impl true
   def init(opts) do
@@ -38,29 +39,48 @@ defmodule Ingest.Uploaders.MultiDestinationWriter do
       Enum.map(destinations, &init_chunk_upload(&1, filename))
       |> Enum.unzip()
 
-    if Enum.member?(statuses, :error) do
-      {:error, destinations, %{}}
+    # Pair statuses with destinations
+    destination_results = Enum.zip(statuses, destinations)
+
+    # Partition into successful and failed ones
+    {oks, errors} =
+      Enum.split_with(destination_results, fn
+        {:ok, _dest} -> true
+        _ -> false
+      end)
+
+    if oks == [] do
+      # If no destination succeeded-- fail
+      {:error, :no_successful_destinations}
     else
+      successful_destinations = Enum.map(oks, fn {:ok, dest} -> dest end)
+
+      # log something about partial failure
+      if errors != [] do
+        Logger.warn("[Uploader] Some destinations failed to init: #{inspect(errors)}")
+      end
+
       {:ok,
        %{
          chunk: 1,
-         destinations: destinations,
+         destinations: successful_destinations,
          filename: filename,
          original_filename: original_filename
        }}
     end
   end
 
-  @impl true
-  def meta(state) do
-    state
-  end
-
+  ###
+  ### NFC when this is called in the call backs
+  ###
   @impl true
   def write_chunk(data, state) do
     # build a list of Tasks to await - the return will take the place
     # of the original destination list - all needed information for writing a chunk
     # should be found on the destination and as part of the user provided filename
+
+    Logger.info("OK SO WRITE CHUNK IS CALLED AS AN AUTOMATIC CALLBACK??????")
+
     {statuses, destinations} =
       Enum.map(state.destinations, &upload_chunk(&1, state.filename, data))
       |> Enum.unzip()
@@ -110,6 +130,8 @@ defmodule Ingest.Uploaders.MultiDestinationWriter do
   # we return the full destination so we can simply rebuild the list
   # without having to keep track of the association between state and destination
   defp init_chunk_upload({destination, state}, filename) do
+    Logger.info("INIT CHUNK UPLOAD FIRING ----------------------- #{inspect(destination)}")
+
     case destination.type do
       :azure ->
         Azure.init(destination, filename, state, original_filename: state.original_filename)

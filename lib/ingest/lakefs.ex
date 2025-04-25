@@ -100,19 +100,45 @@ defmodule Ingest.LakeFS do
     end
   end
 
+  # @doc """
+  # Creates a new branch for the repository. Will error if the branch exists
+  # """
+  # def create_branch(%__MODULE__{} = client, repository, name, source \\ "main") do
+  #   case Req.post(client.base_req,
+  #          url: "/api/v1/repositories/#{URI.encode(repository)}/branches",
+  #          json: %{
+  #            name: name,
+  #            source: source
+  #          }
+  #        ) do
+  #     {:ok, %{status: 201}} -> {:ok, nil}
+  #     {:error, res} -> {:error, res}
+  #   end
+  # end
   @doc """
-  Creates a new branch for the repository. Will error if the branch exists
+  Creates a new branch for the repository.
+  Returns:
+    - `{:ok, nil}` on success (branch created)
+    - `{:error, :branch_exists}` if the branch already exists (409)
+    - `{:error, :precondition_failed}` if LakeFS returns 412
+    - `{:error, {:unexpected_status, status, body}}` for other responses
+    - `{:error, reason}` if HTTP request fails
   """
   def create_branch(%__MODULE__{} = client, repository, name, source \\ "main") do
-    case Req.post(client.base_req,
-           url: "/api/v1/repositories/#{URI.encode(repository)}/branches",
-           json: %{
-             name: name,
-             source: source
-           }
-         ) do
-      {:ok, %{status: 201}} -> {:ok, nil}
-      {:error, res} -> {:error, res}
+    with {:ok, %Req.Response{status: status} = res} <-
+           Req.post(client.base_req,
+             url: "/api/v1/repositories/#{URI.encode(repository)}/branches",
+             json: %{
+               name: name,
+               source: source
+             }
+           ) do
+      case status do
+        201 -> {:ok, nil}
+        409 -> {:error, :branch_exists}
+        412 -> {:error, :precondition_failed}
+        _ -> {:error, {:unexpected_status, status, res.body}}
+      end
     end
   end
 

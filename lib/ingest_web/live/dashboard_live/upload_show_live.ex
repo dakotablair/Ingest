@@ -140,6 +140,8 @@ defmodule IngestWeb.UploadShowLive do
   def mount(%{"id" => id}, _session, socket) do
     request = Requests.get_request!(id)
 
+    destinations = request.destinations ++ request.project.destinations
+
     classifications_allowed =
       (request.destinations ++ request.project.destinations)
       |> Enum.map(fn d -> d.classifications_allowed end)
@@ -182,6 +184,8 @@ defmodule IngestWeb.UploadShowLive do
   end
 
   defp handle_progress(:files, entry, socket) do
+    Logger.info("IS HANDLE PROGRESS FIRIN?????? BY GOD I HOPE SO ---------------------#{inspect(entry)}")
+
     if entry.done? do
       # meta should have the information for the destination and the location of the file
       # in the destination. We need to extract the information from the meta and then
@@ -225,6 +229,7 @@ defmodule IngestWeb.UploadShowLive do
 
   @impl true
   def handle_event("validate", _params, socket) do
+
     {:noreply, socket}
   end
 

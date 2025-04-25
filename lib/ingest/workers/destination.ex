@@ -10,12 +10,14 @@ defmodule Ingest.Workers.Destination do
   alias Ingest.Destinations
   alias Ingest.LakeFS
   alias Ingest.Destinations.Destination
+  require Logger
 
   use Oban.Worker, queue: :destinations
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"destination_member_id" => destination_member_id} = _args}) do
+    Logger.info("DESTINATION ID MEMBER in OBAN WORKER #{destination_member_id}")
     member = Destinations.get_destination_member!(destination_member_id)
-
+    Logger.info("RETURNED MEMBER #{inspect(member)}")
     configure_destination(member.destination)
   end
 
@@ -81,7 +83,6 @@ defmodule Ingest.Workers.Destination do
         secret_access_key: destination.lakefs_config.secret_access_key
       )
 
-    # we need to
 
     # create the repo, if we error, we assume it's because it exists already - any future calls
     # will fail if this assumption is untrue, and we don't need to be gentle handling errors
@@ -161,31 +162,78 @@ defmodule Ingest.Workers.Destination do
       LakeFS.attach_user_group(client, admin_group["id"], user)
     end
 
-    # if we have the datahub_integration we need to put the datahub action into the repository and commit
+    # # if we have the datahub_integration we need to put the datahub action into the repository and commit
+    # if destination.additional_config["datahub_integration"] == "true" do
+    #   endpoint = Application.get_env(:ingest, IngestWeb.Endpoint)[:url]
+
+    #   # :ok =
+    #   #   LakeFS.put_object(
+    #   #     client,
+    #   #     repo,
+    #   #     "_lakefs_actions/actions.yaml",
+    #   #     LakeFS.pre_merge_metadata_hook(
+    #   #       URI.to_string(%URI{
+    #   #         host: endpoint[:host],
+    #   #         port: endpoint[:port],
+    #   #         scheme: endpoint[:scheme],
+    #   #         path: "/destinations/#{destination.id}/lakefs_action",
+    #   #         # we encode the datahub endpoint into the URL so we can search for the token by URL and destination
+    #   #         # later on
+    #   #         query:
+    #   #           "datahub_url=#{URI.encode(destination.additional_config["datahub_endpoint"])}"
+    #   #       })
+    #   #     )
+    #   #   )
+    #   case LakeFS.put_object(
+    #       client,
+    #       repo,
+    #       "_lakefs_actions/actions.yaml",
+    #       LakeFS.pre_merge_metadata_hook(
+    #         URI.to_string(%URI{
+    #           host: endpoint[:host],
+    #           port: endpoint[:port],
+    #           scheme: endpoint[:scheme],
+    #           path: "/destinations/#{destination.id}/lakefs_action",
+    #           # we encode the datahub endpoint into the URL so we can search for the token by URL and destination
+    #           # later on
+    #           query:
+    #             "datahub_url=#{URI.encode(destination.additional_config["datahub_endpoint"])}"
+    #         })
+    #       )
+    #   ) do
+    #     :ok -> :ok
+    #     {:error, reason} ->
+    #       Logger.error("Failed to put LakeFS object: #{inspect(reason)}")
+    #       :ok
+    #   end
+
+    #   # we have to commit the actions before they work
+    #   {:ok, _commit} = LakeFS.commit_changes(client, repo, message: "initial commit")
+    # end
     if destination.additional_config["datahub_integration"] == "true" do
       endpoint = Application.get_env(:ingest, IngestWeb.Endpoint)[:url]
 
-      :ok =
-        LakeFS.put_object(
-          client,
-          repo,
-          "_lakefs_actions/actions.yaml",
-          LakeFS.pre_merge_metadata_hook(
-            URI.to_string(%URI{
-              host: endpoint[:host],
-              port: endpoint[:port],
-              scheme: endpoint[:scheme],
-              path: "/destinations/#{destination.id}/lakefs_action",
-              # we encode the datahub endpoint into the URL so we can search for the token by URL and destination
-              # later on
-              query:
-                "datahub_url=#{URI.encode(destination.additional_config["datahub_endpoint"])}"
-            })
-          )
-        )
+      case LakeFS.put_object(
+             client,
+             repo,
+             "_lakefs_actions/actions.yaml",
+             LakeFS.pre_merge_metadata_hook(
+               URI.to_string(%URI{
+                 host: endpoint[:host],
+                 port: endpoint[:port],
+                 scheme: endpoint[:scheme],
+                 path: "/destinations/#{destination.id}/lakefs_action",
+                 query:
+                   "datahub_url=#{URI.encode(destination.additional_config["datahub_endpoint"])}"
+               })
+             )
+           ) do
+        :ok ->
+          {:ok, _commit} = LakeFS.commit_changes(client, repo, message: "initial commit")
 
-      # we have to commit the actions before they work
-      {:ok, _commit} = LakeFS.commit_changes(client, repo, message: "initial commit")
+        {:error, reason} ->
+          Logger.error("Failed to put LakeFS object: #{inspect(reason)}")
+      end
     end
 
     # once everything is done, we can set the branch protection
