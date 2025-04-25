@@ -8,6 +8,7 @@ defmodule IngestWeb.LiveComponents.DestinationAddtionalConfigForm do
   alias Ingest.Destinations.LakeFSConfigAdditional
   alias Ingest.Destinations.AzureConfigAdditional
   alias Ingest.Destinations.S3ConfigAdditional
+  require Logger
 
   @impl true
   def render(assigns) do
@@ -251,6 +252,8 @@ defmodule IngestWeb.LiveComponents.DestinationAddtionalConfigForm do
     if changeset.errors != [] do
       {:noreply, socket |> assign(:form, to_form(changeset))}
     else
+      user_is_admin = Ingest.Accounts.User.is_admin?(socket.assigns.current_user)
+
       params =
         case socket.assigns.destination.type do
           :lakefs ->
@@ -268,25 +271,36 @@ defmodule IngestWeb.LiveComponents.DestinationAddtionalConfigForm do
         end
 
       updated =
-        Ingest.Destinations.update_destination_members_additional_config(
-          socket.assigns.destination_member,
-          params
-        )
+        cond do
+          socket.assigns.destination_member ->
+            Ingest.Destinations.update_destination_members_additional_config(
+              socket.assigns.destination_member,
+              params
+            )
 
-      if updated > 0 do
-        # we kick off an Oban job to async run any configuration needed on the member
-        %{destination_member_id: socket.assigns.destination_member.id}
-        |> Ingest.Workers.Destination.new()
-        |> Oban.insert()
+          user_is_admin ->
+            :admin_bypass
+
+          true ->
+            nil
+        end
+
+      if updated == nil do
+        {:noreply,
+         socket
+         |> put_flash(:error, "Missing permission to configure this destination.")
+         |> push_patch(to: socket.assigns.patch)}
+      else
+        # insert job only if a destination_member exists
+        if socket.assigns.destination_member do
+          %{destination_member_id: socket.assigns.destination_member.id}
+          |> Ingest.Workers.Destination.new()
+          |> Oban.insert()
+        end
 
         {:noreply,
          socket
          |> put_flash(:info, "Destination Configuration updated successfully")
-         |> push_patch(to: socket.assigns.patch)}
-      else
-        {:noreply,
-         socket
-         |> put_flash(:error, "Unable to update Destination Configration")
          |> push_patch(to: socket.assigns.patch)}
       end
     end
