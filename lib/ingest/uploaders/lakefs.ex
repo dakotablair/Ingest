@@ -12,58 +12,59 @@ defmodule Ingest.Uploaders.Lakefs do
   def init!(%Destination{} = destination, filename, state, opts \\ []) do
     original_filename = Keyword.get(opts, :original_filename, nil)
 
-    # we need validate/create if not exists a branch for the request & user email
-    branch_name = upsert_branch(destination, state.request, state.user)
+    Logger.info("INIT DESTINATION- #{inspect(destination)}")
+    Logger.info("INIT state- #{inspect(state)}")
+    Logger.info("INIT FILENAME- #{inspect(filename)}")
 
-    repository =
-      if destination.additional_config do
-        destination.additional_config["repository_name"]
-      else
-        destination.lakefs_config.repository
-      end
+    case upsert_branch(destination, state.request, state.user) do
+      {:ok, branch_name} ->
+        repository =
+          if destination.additional_config do
+            destination.additional_config["repository_name"]
+          else
+            destination.lakefs_config.repository
+          end
 
+        # Check if object already exists to maybe rename it
+        filename =
+          with s3_op <- ExAws.S3.head_object("#{repository}/#{branch_name}", filename),
+               s3_config <- build_config(destination.lakefs_config),
+               {:ok, _res} <- ExAws.request(s3_op, s3_config) do
+            "#{filename} - COPY #{DateTime.utc_now() |> DateTime.to_naive()}"
+          else
+            _ -> filename
+          end
 
-    # first we check if the object by filename and path exist in the bucket already
-    # if it does, then we need to change the name and appened a - COPY (date) to the end of it
-    filename =
-      with s3_op <-
-             ExAws.S3.head_object(
-               "#{repository}/#{branch_name}",
-               filename
-             ),
-           s3_config <- build_config(destination.lakefs_config),
-           {:ok, %{headers: _headers}} <- ExAws.request(s3_op, s3_config) do
-        "#{filename} - COPY #{DateTime.now!("UTC") |> DateTime.to_naive()}"
-      else
-        # assumption is that the error is a 404 not found, so we can keep the filename
-        _ -> filename
-      end
+        # Add original filename prefix if needed
+        filename =
+          if original_filename do
+            "#{original_filename} Supporting Data/ #{filename}"
+          else
+            filename
+          end
 
-    filename =
-      if original_filename do
-        "#{original_filename} Supporting Data/ #{filename}"
-      else
-        filename
-      end
+        with s3_op <-
+               ExAws.S3.initiate_multipart_upload("#{repository}/#{branch_name}", filename),
+             s3_config <- build_config(destination.lakefs_config),
+             {:ok, %{body: %{upload_id: upload_id}}} <- ExAws.request(s3_op, s3_config) do
+          {:ok,
+           {destination,
+            state
+            |> Map.put(:filename, filename)
+            |> Map.put(:chunk, 1)
+            |> Map.put(:config, s3_config)
+            |> Map.put(:op, s3_op |> Map.put(:upload_id, upload_id) |> Map.put(:opts, []))
+            |> Map.put(:upload_id, upload_id)
+            |> Map.put(:parts, [])}}
+        else
+          err ->
+            Logger.error("LakeFS upload init error: #{inspect(err)}")
+            {:error, err}
+        end
 
-    with s3_op <-
-           ExAws.S3.initiate_multipart_upload(
-             "#{repository}/#{branch_name}",
-             filename
-           ),
-         s3_config <- build_config(destination.lakefs_config),
-         {:ok, %{body: %{upload_id: upload_id}}} <- ExAws.request(s3_op, s3_config) do
-      {:ok,
-       {destination,
-        state
-        |> Map.put(:filename, filename)
-        |> Map.put(:chunk, 1)
-        |> Map.put(:config, s3_config)
-        |> Map.put(:op, s3_op |> Map.put(:upload_id, upload_id) |> Map.put(:opts, []))
-        |> Map.put(:upload_id, upload_id)
-        |> Map.put(:parts, [])}}
-    else
-      err -> {:error, err}
+      {:error, reason} ->
+        Logger.error("Could not upsert branch: #{inspect(reason)}")
+        {:error, reason}
     end
   end
 
@@ -74,27 +75,31 @@ defmodule Ingest.Uploaders.Lakefs do
         filename,
         data
       ) do
-    # we need validate/create if not exists a branch for the request & user email
-    branch_name = upsert_branch(destination, request, user)
+    case upsert_branch(destination, request, user) do
+      {:ok, branch_name} ->
+        repository =
+          if destination.additional_config do
+            destination.additional_config["repository_name"]
+          else
+            destination.lakefs_config.repository
+          end
 
-    repository =
-      if destination.additional_config do
-        destination.additional_config["repository_name"]
-      else
-        destination.lakefs_config.repository
-      end
+        s3_op = ExAws.S3.put_object("#{repository}/#{branch_name}", filename, data)
+        s3_config = build_config(destination.lakefs_config)
 
-    s3_op = ExAws.S3.put_object("#{repository}/#{branch_name}", filename, data)
-    s3_config = build_config(destination.lakefs_config)
+        case ExAws.request(s3_op, s3_config) do
+          {:ok, %{status_code: 200}} ->
+            {:ok, :uploaded}
 
-    case ExAws.request(s3_op, s3_config) do
-      {:ok, %{status_code: 200}} ->
-        {:ok, :uploaded}
+          {:ok, other} ->
+            {:error, {:unexpected_success_response, other}}
 
-      {:ok, other} ->
-        {:error, {:unexpected_success_response, other}}
+          {:error, reason} ->
+            {:error, reason}
+        end
 
       {:error, reason} ->
+        Logger.error("Failed to upsert branch for upload: #{inspect(reason)}")
         {:error, reason}
     end
   end
@@ -106,54 +111,44 @@ defmodule Ingest.Uploaders.Lakefs do
         filename,
         data
       ) do
-    # we need validate/create if not exists a branch for the request & user email
-    branch_name = upsert_branch(destination, request, user)
+    case upsert_branch(destination, request, user) do
+      {:ok, branch_name} ->
+        repository =
+          if destination.additional_config do
+            destination.additional_config["repository_name"]
+          else
+            destination.lakefs_config.repository
+          end
 
-    repository =
-      if destination.additional_config do
-        destination.additional_config["repository_name"]
-      else
-        destination.lakefs_config.repository
-      end
+        s3_op =
+          ExAws.S3.put_object_copy(
+            "#{repository}/#{branch_name}",
+            filename,
+            "#{repository}/#{branch_name}",
+            filename,
+            [
+              {:metadata_directive, "REPLACE"},
+              {:meta, data}
+            ]
+          )
 
-    s3_op =
-      ExAws.S3.put_object_copy(
-        "#{repository}/#{branch_name}",
-        filename,
-        "#{repository}/#{branch_name}",
-        filename,
-        [
-          {:metadata_directive, "REPLACE"},
-          {:meta, data}
-        ]
-      )
+        s3_config = build_config(destination.lakefs_config)
 
-    s3_config = build_config(destination.lakefs_config)
+        case ExAws.request(s3_op, s3_config) do
+          {:ok, %{status_code: 200}} ->
+            {:ok, :metadata_updated}
 
-    case ExAws.request(s3_op, s3_config) do
-      {:ok, %{status_code: 200}} ->
-        {:ok, :metadata_updated}
+          {:ok, other} ->
+            {:error, {:unexpected_success_response, other}}
 
-      {:ok, other} ->
-        {:error, {:unexpected_success_response, other}}
+          {:error, reason} ->
+            {:error, reason}
+        end
 
       {:error, reason} ->
+        Logger.error("Failed to upsert branch for metadata update: #{inspect(reason)}")
         {:error, reason}
     end
-    # with s3_op <-
-    #        ExAws.S3.put_object_copy(
-    #          "#{repository}/#{branch_name}",
-    #          filename,
-    #          "#{repository}/#{branch_name}",
-    #          filename,
-    #          [{:metadata_directive, "REPLACE"}, {:meta, data}]
-    #        ),
-    #      s3_config <- build_config(destination.lakefs_config),
-    #      {:ok, %{body: %{upload_id: upload_id}}} <- ExAws.request(s3_op, s3_config) do
-    #   {:ok, upload_id}
-    # else
-    #   err -> {:error, err}
-    # end
   end
 
   def upload_chunk(%Destination{} = destination, _filename, state, data, _opts \\ []) do
@@ -197,52 +192,128 @@ defmodule Ingest.Uploaders.Lakefs do
     )
   end
 
+  # defp upsert_branch(%Destination{} = destination, %Request{} = request, %User{} = user) do
+  #   branch_name = Regex.replace(~r/\W+/, "#{request.name}-by-#{user.name}", "-")
+
+  #   config = destination.lakefs_config
+
+  #   repository =
+  #     destination.additional_config["repository_name"] || config.repository
+
+  #   client =
+  #     Ingest.LakeFS.new!(
+  #       %URI{
+  #         host: config.base_url,
+  #         scheme: if(config.ssl, do: "https", else: "http"),
+  #         port: config.port
+  #       },
+  #       access_key: config.access_key_id,
+  #       secret_access_key: config.secret_access_key
+  #     )
+
+  #   case Ingest.LakeFS.list_branches(client, repository) do
+  #     {:ok, branches} ->
+  #       branch_exists? = Enum.any?(branches, fn b -> b["id"] == branch_name end)
+
+  #       if branch_exists? do
+  #         {:ok, branch_name}
+  #       else
+  #         case Ingest.LakeFS.create_branch(client, repository, branch_name) do
+  #           {:ok, _res} ->
+  #             Logger.info("Created branch #{branch_name} in #{repository}")
+  #             {:ok, branch_name}
+
+  #           {:error, :precondition_failed} ->
+  #             Logger.warn("Branch already exists or conflict: #{branch_name}")
+  #             {:ok, branch_name}
+
+  #           {:error, reason} ->
+  #             Logger.error("Failed to create branch #{branch_name}: #{inspect(reason)}")
+  #             {:error, reason}
+  #         end
+  #       end
+
+  #     {:error, reason} ->
+  #       Logger.error("Failed to list branches for #{repository}: #{inspect(reason)}")
+  #       nil
+  #   end
+  # end
   defp upsert_branch(%Destination{} = destination, %Request{} = request, %User{} = user) do
     branch_name = Regex.replace(~r/\W+/, "#{request.name}-by-#{user.name}", "-")
+
     config = destination.lakefs_config
 
     repository =
-      if destination.additional_config do
-        destination.additional_config["repository_name"]
-      else
-        destination.lakefs_config.repository
-      end
+      destination.additional_config["repository_name"] || config.repository
 
-    with client <-
-           Ingest.LakeFS.new!(
-             %URI{
-               host: config.base_url,
-               scheme: if(config.ssl, do: "https", else: "http"),
-               port: config.port
-             },
-             access_key: config.access_key_id,
-             secret_access_key: config.secret_access_key
-           ),
-         {:ok, branches} <- Ingest.LakeFS.list_branches(client, repository) do
-      branch =
-        Enum.find(branches, fn b -> b["id"] == branch_name end)
+    client =
+      Ingest.LakeFS.new!(
+        %URI{
+          host: config.base_url,
+          scheme: if(config.ssl, do: "https", else: "http"),
+          port: config.port
+        },
+        access_key: config.access_key_id,
+        secret_access_key: config.secret_access_key,
+        storage_namespace: config.storage_namespace
+      )
 
-      if !branch do
-        {:ok, _res} =
-          Ingest.LakeFS.new!(
-            %URI{
-              host: config.base_url,
-              scheme: if(config.ssl, do: "https", else: "http"),
-              port: config.port
-            },
-            access_key: config.access_key_id,
-            secret_access_key: config.secret_access_key,
-            port: config.port
-          )
-          |> Ingest.LakeFS.create_branch(
-            repository,
-            branch_name
-          )
-      end
+    # Ensure repository exists
+    case Ingest.LakeFS.get_repo(client, repository) do
+      {:ok, _repo} ->
+        :ok
 
-      branch_name
-    else
-      {:error, _err} -> nil
+      {:error, :not_found} ->
+        Logger.warn("Repository #{repository} not found, attempting to create it...")
+
+        case Ingest.LakeFS.create_repo(client, repository,
+               storage_namespace: config.storage_namespace
+             ) do
+          {:ok, _} ->
+            Logger.info("Created repository #{repository}")
+            :ok
+
+          {:error, reason} ->
+            Logger.error("Could not create repository #{repository}: #{inspect(reason)}")
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        Logger.error("Failed to check repository #{repository}: #{inspect(reason)}")
+        {:error, reason}
+    end
+    |> case do
+      :ok ->
+        # Proceed to check/create branch
+        case Ingest.LakeFS.list_branches(client, repository) do
+          {:ok, branches} ->
+            branch_exists? = Enum.any?(branches, fn b -> b["id"] == branch_name end)
+
+            if branch_exists? do
+              {:ok, branch_name}
+            else
+              case Ingest.LakeFS.create_branch(client, repository, branch_name) do
+                {:ok, _res} ->
+                  Logger.info("Created branch #{branch_name} in #{repository}")
+                  {:ok, branch_name}
+
+                {:error, :precondition_failed} ->
+                  Logger.warn("Branch already exists or conflict: #{branch_name}")
+                  {:ok, branch_name}
+
+                {:error, reason} ->
+                  Logger.error("Failed to create branch #{branch_name}: #{inspect(reason)}")
+                  {:error, reason}
+              end
+            end
+
+          {:error, reason} ->
+            Logger.error("Failed to list branches for #{repository}: #{inspect(reason)}")
+            {:error, reason}
+        end
+
+      other ->
+        other
     end
   end
 end
