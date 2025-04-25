@@ -100,21 +100,6 @@ defmodule Ingest.LakeFS do
     end
   end
 
-  # @doc """
-  # Creates a new branch for the repository. Will error if the branch exists
-  # """
-  # def create_branch(%__MODULE__{} = client, repository, name, source \\ "main") do
-  #   case Req.post(client.base_req,
-  #          url: "/api/v1/repositories/#{URI.encode(repository)}/branches",
-  #          json: %{
-  #            name: name,
-  #            source: source
-  #          }
-  #        ) do
-  #     {:ok, %{status: 201}} -> {:ok, nil}
-  #     {:error, res} -> {:error, res}
-  #   end
-  # end
   @doc """
   Creates a new branch for the repository.
   Returns:
