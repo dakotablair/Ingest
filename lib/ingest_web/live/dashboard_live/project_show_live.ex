@@ -1,13 +1,18 @@
 defmodule IngestWeb.ProjectShowLive do
   alias Ingest.Uploads
   alias Ingest.Accounts
-  alias Ingest.Projects.ProjectInvites
+  alias Ingest.Accounts.User
+  alias Ingest.Accounts.User.Utils
   alias Ingest.Projects
+  alias Ingest.Projects.Project
+  alias Ingest.Projects.ProjectInvites
+  alias Ingest.Repo
   use IngestWeb, :live_view
   require Logger
 
   @impl true
   def render(assigns) do
+    project_role_map = get_project_role_map()
     ~H"""
     <div>
       <h1 class="text-2xl">{@project.name}</h1>
@@ -254,18 +259,27 @@ defmodule IngestWeb.ProjectShowLive do
               </span>
             </div>
           </div>
-
           <div>
             <.table id="members" rows={@members}>
               <:col :let={member} label="Member">{member.user.email}</:col>
               <:col :let={member} label="Role">
-                <.form for={} phx-change="update_role" phx-value-member={member.user.id}>
+                <div
+                  :if={!Utils.user_may_update_project_role?(@current_user, @project)}
+                >
+                  {project_role_map[member.role]}
+                </div>
+                <.form
+                  :if={Utils.user_may_update_project_role?(@current_user, @project)}
+                  for={}
+                  phx-change="update_role"
+                  phx-value-member={member.user.id}
+                >
                   <.input
                     name="role"
+                    options={get_project_role_entries()}
+                    prompt="Select one"
                     type="select"
                     value={member.role}
-                    prompt="Select one"
-                    options={[Member: :member, Manager: :manager, "Co-Owner": :owner]}
                   />
                 </.form>
               </:col>
@@ -481,8 +495,13 @@ defmodule IngestWeb.ProjectShowLive do
 
   @impl true
   def handle_params(%{"id" => id}, _uri, socket) do
-    project = Projects.get_owned_project!(socket.assigns.current_user, id)
-
+    user = socket.assigns.current_user
+    project =
+      if User.is_admin?(user) do
+        Projects.get_project!(id)
+      else
+        Projects.get_owned_project!(user, id)
+      end
     {:noreply,
      socket
      |> stream(:destinations, project.destinations)
@@ -593,7 +612,8 @@ defmodule IngestWeb.ProjectShowLive do
         socket
       ) do
     case socket.assigns.project
-         |> Ingest.Projects.update_project_members(
+         |> Projects.update_project_member_role(
+           socket.assigns.current_user,
            Enum.find(socket.assigns.project.project_members, fn member ->
              member.id == member_id
            end),
@@ -613,13 +633,31 @@ defmodule IngestWeb.ProjectShowLive do
     end
   end
 
-  defp get_upload_count(request) do
-    Uploads.uploads_for_request_count(request)
-  end
-
   defp check_use(project, flavour) do
     if Ingest.Projects.request_count(project) > 0,
       do: "#{flavour} is in use are you sure you want to delete?",
       else: "Are you sure you want to delete?"
   end
+
+  @doc """
+  This function contains an list of all project role names and their
+  corresponding data values. This ensures their order is specified explictly.
+  """
+  defp get_project_role_entries() do
+    [{:Member, :member}, {:Manager, :manager}, {:Owner, :owner}]
+  end
+
+  @doc """
+  The returned map allows looking up a project role names by its data value.
+  """
+  defp get_project_role_map() do
+    for {name, value} <- get_project_role_entries(), into: %{} do
+      {value, name}
+    end
+  end
+
+  defp get_upload_count(request) do
+    Uploads.uploads_for_request_count(request)
+  end
+
 end

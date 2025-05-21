@@ -4,13 +4,14 @@ defmodule Ingest.Projects do
   """
 
   import Ecto.Query, warn: false
+  alias Ingest.Accounts.User
+  alias Ingest.Accounts.User.Utils
+  alias Ingest.Projects.Project
   alias Ingest.Projects.ProjectDestination
+  alias Ingest.Projects.ProjectMembers
   alias Ingest.Projects.ProjectSearch
   alias Ingest.Repo
-
-  alias Ingest.Projects.Project
-  alias Ingest.Projects.ProjectMembers
-  alias Ingest.Accounts.User
+  alias Ingest.Requests.Request
   alias Ingest.Requests.Template
 
   @doc """
@@ -33,13 +34,19 @@ defmodule Ingest.Projects do
     |> Repo.preload(:user)
   end
 
-  def update_project_members(%Project{} = project, %User{} = user, role) do
-    from(pm in ProjectMembers,
-      where:
-        pm.member_id ==
-          ^user.id and pm.project_id == ^project.id
-    )
-    |> Repo.update_all(set: [role: role])
+  def update_project_member_role(
+    %Project{} = project, %User{} = user_initiator, %User{} = user, role
+  ) do
+    if Utils.user_may_update_project_role?(user_initiator, project) do
+      from(pm in ProjectMembers,
+        where:
+          pm.member_id ==
+            ^user.id and pm.project_id == ^project.id
+      )
+      |> Repo.update_all(set: [role: role])
+    else
+      {:error, :not_allowed}
+    end
   end
 
   def list_project_with_count do
@@ -49,6 +56,19 @@ defmodule Ingest.Projects do
         group_by: p.id,
         select: {p, count(r.id)}
 
+    Repo.all(query)
+  end
+
+  @doc """
+  List all projects along with the number of its data requests.
+  """
+  def list_all_projects_with_count() do
+    query =
+       from p in Project,
+         full_join: r in Request,
+         group_by: [p.id, r.project_id],
+         select: {p, sum(r.project_id == p.id)},
+         order_by: p.id
     Repo.all(query)
   end
 
@@ -421,4 +441,5 @@ defmodule Ingest.Projects do
         select: count()
     )
   end
+
 end

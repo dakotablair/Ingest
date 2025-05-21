@@ -146,9 +146,11 @@ defmodule IngestWeb.ProjectsLive do
      |> stream_configure(:projects, dom_id: &elem(&1, 0).id)
      |> stream(
        :projects,
-       Ingest.Projects.list_own_projects_with_count(socket.assigns.current_user.id)
+       Projects.list_all_projects_with_count()
      )
-     |> apply_action(socket.assigns.live_action, params), layout: {IngestWeb.Layouts, :dashboard}}
+     |> apply_action(socket.assigns.live_action, params),
+     layout: {IngestWeb.Layouts, :dashboard}
+    }
   end
 
   @impl true
